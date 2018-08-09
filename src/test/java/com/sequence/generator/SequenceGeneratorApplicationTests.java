@@ -14,10 +14,11 @@ public class SequenceGeneratorApplicationTests {
     @Autowired
     SequenceGenService sequenceGenService;
 
+
     @Test
     public void contextLoads() {
 
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < 20; i++) {
             new Thread(() -> {
                 String s = sequenceGenService.doWork("192.168.1.1");
                 System.out.println("id => " + s);

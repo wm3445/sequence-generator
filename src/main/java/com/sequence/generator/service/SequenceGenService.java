@@ -1,6 +1,7 @@
 package com.sequence.generator.service;
 
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -8,13 +9,13 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
 
 /**
  * @author wangmeng
- *
+ * <p>
  * create_primary 表结构为
  * id   stub
  * 主键  唯一索引
@@ -24,9 +25,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * 设置号段间隔为1000，生成号段 n*1000 -> (n+1)*1000
  * 存储到内存中，利用Atomic包中AtomicLong递增id
  * 如果达到最大id则从数据库重新获取号段，存储到内存中。
- *
+ * <p>
  * 缺点：服务器重启会丢失部分id
- *
  */
 @Service
 public class SequenceGenService implements CommandLineRunner {
@@ -34,11 +34,13 @@ public class SequenceGenService implements CommandLineRunner {
     @Autowired
     JdbcTemplate jdbcTemplate;
 
-    ConcurrentMap<String, AtomicLong> currentId = new ConcurrentHashMap<>();
+    private ConcurrentMap<String, AtomicLong> currentId = new ConcurrentHashMap<>();
 
-    ConcurrentMap<String, AtomicLong> currentMaxId = new ConcurrentHashMap<>();
+    private ConcurrentMap<String, AtomicLong> currentMaxId = new ConcurrentHashMap<>();
 
-    private static int segment = 1000;
+    private ThreadPoolExecutor executor;
+
+    private static int segment = 10;
 
     static final String lock = "";
 
@@ -54,6 +56,11 @@ public class SequenceGenService implements CommandLineRunner {
             currentId.put(ip, atomic);
             currentMaxId.put(ip, atomicMax);
         }
+        ThreadFactory threadFactory = new ThreadFactoryBuilder()
+                .setNameFormat("db-thread-%d")
+                .build();
+        executor = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>(), threadFactory);
         System.out.println("-=-=-=-=-=初始化-=-=-=-=-=");
     }
 
@@ -79,17 +86,39 @@ public class SequenceGenService implements CommandLineRunner {
 
     public String doWork(String ip) {
         Long uid = 0L;
-        synchronized (lock) {
-            uid = currentId.get(ip).get();
-            Long maxUid = currentMaxId.get(ip).get();
-            while (uid >= maxUid) {
-                initNum(ip);
-                uid = currentId.get(ip).get();
+        uid = currentId.get(ip).incrementAndGet();
+        Long maxUid = currentMaxId.get(ip).get();
+        if (uid > maxUid) {
+            synchronized (lock){
                 maxUid = currentMaxId.get(ip).get();
+                if(uid > maxUid){
+                    Thread currentThread = Thread.currentThread();
+                    executor.execute(new Task(ip, currentThread));
+                    LockSupport.park(currentThread);
+                }
             }
-            uid = currentId.get(ip).incrementAndGet();
         }
+        uid = currentId.get(ip).incrementAndGet();
+
         return uid.toString();
+    }
+
+    class Task implements Runnable {
+
+        private String ip;
+
+        private Thread targetThread;
+
+        public Task(String ip, Thread currentThread) {
+            this.ip = ip;
+            this.targetThread = currentThread;
+        }
+
+        @Override
+        public void run() {
+            initNum(ip);
+            LockSupport.unpark(targetThread);
+        }
     }
 
     @Override

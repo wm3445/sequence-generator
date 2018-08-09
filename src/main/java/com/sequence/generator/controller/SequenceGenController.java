@@ -17,8 +17,7 @@ public class SequenceGenController {
 
     @GetMapping(value = "/genId")
     public String genId(){
-        String s = sequenceGenService.doWork("192.168.1.5");
-        return s;
+        return sequenceGenService.doWork("192.168.1.5");
     }
 
 }
